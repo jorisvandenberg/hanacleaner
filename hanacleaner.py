@@ -899,7 +899,10 @@ def find_all(name, path, zipLinks):
     return result
     
 def getNbrRows(schema, table, sqlman):
-    return int(run_command(sqlman.hdbsql_jAQaxU + " \"SELECT COUNT(*) FROM "+schema+"."+table+" \"").strip(' '))
+    try:
+        return int(run_command(sqlman.hdbsql_jAQaxU + " \"SELECT COUNT(*) FROM "+schema+"."+table+" \"").strip(' '))
+    except:
+        return 0
 
 def getAdapterName(schema, table, sqlman):
     return run_command(sqlman.hdbsql_jAQaxU + " \"SELECT R.ADAPTER_NAME FROM SYS.REMOTE_SOURCES R JOIN SYS.VIRTUAL_TABLES V ON R.REMOTE_SOURCE_NAME = V.REMOTE_SOURCE_NAME WHERE V.SCHEMA_NAME = '"+schema+"' and TABLE_NAME = '"+table+"'\"").strip(' ')
