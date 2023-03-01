@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 import sys, os, time, subprocess, re
 from difflib import Differ
 import signal
+import fnmatch
 
 def printHelp():
     print("                                                                                                                                   ")    
@@ -36,8 +37,7 @@ def printHelp():
     print("         ----  TRACE FILES  ----                                                                                                   ")
     print(" -tc     retention days for trace files [days], trace files with their latest modification time older than these number of days are")  #internal incident 1870190781
     print("         removed from all hosts, default: -1 (not used)                                                                            ")
-    print("         Note: Conceptual -tc is the same as -tf, but -tc is using ALTER SYSTEM CLEAR TRACES ... See SQL Ref. for more info.       ")
-    print("         Note: there is a bug (fixed with rev.122.11) that could cause younger trace files to be removed.                          ")
+    print("         Note: Conceptually -tc is the same as -tf, but -tc is using ALTER SYSTEM CLEAR TRACES ... See SQL Ref. for more info.     ")
     print("         Note: expensive statements are not included in -tc, see -te below                                                         ")
     print(" -te     retention days for expensive statement files [days], same as for -tc, but only for expensive statement files, only use    ")  #BUG --> https://jira.tools.sap/browse/HDBKERNEL-7797  
     print("         if you read and understood SAP Note 2819941 (should probably only be used with use_in_memory_tracking = false),           ")
@@ -52,15 +52,25 @@ def printHelp():
     print("         flag, is finished. This can take some seconds. If it is not finished before the time out, specified by the -tmo flag,     ")
     print("         the move will not happen, default: 30 seconds                                                                             ")
     print(" -tf     retention days for trace files [days], trace files, in all hosts, that are older than this number of days are removed     ")
-    print("         (except for the currently opened trace files), only files with certain extensions like .trc, .log etc are taken into      ")
-    print("         account, backup.log and backint.log, are excepted, please see -zb and -zp instead, default: -1 (not used)                 ")
-    print("         Note: Conceptual -tf is the same as -tc, but -tf is using ALTER SYSTEM REMOVE TRACES ... See SQL Ref. for more info.      ")
+    print("         (except for the currently opened trace files), only files with these extensions are taken into account:                   ")
+    print("               .trc, .log, .stat, .py, .tpt, .gz, .zip, .old, .xml, .txt, .docs, .cfg, .dmp, .cockpit, .xs                         ")
+    print("         there is a list of files that are ignored  (to add your own files to this ignore list, see -ti)                           ")
+    print("               kill.sap, backup.log, backint.log, hdbdaemon.status, sapstart.sem, sapstart.log, .sap<SID>_HDB<dbinstance>,         ")
+    print("               http_fe.log, lss/, nameserver_suschksrv.trc                                                                         ")
+    print("         default: -1 (not used)                                                                                                    ")
+    print("         Note: Conceptually -tf is the same as -tc, but -tf is using ALTER SYSTEM REMOVE TRACES ... See SQL Ref. for more info.    ")
     print("         Note: ALTER SYSTEM REMOVE TRACES ... WITH BACKUP does not exist, see SQL Ref., so there is no -tfb flag.                  ")
+    print(" -ti     trace file removal ignore list, list of files that should not be removed with -tf (wildcard(s) with * is possible)        ")
     print(" -to     output traces [true/false], displays trace files before and after the cleanup, default: false                             ")
     print(" -td     output deleted traces [true/false], displays trace files that were deleted, default: false                                ")
     print("         ----  DUMP FILES  ----                                                                                                    ")
     print(" -dr     retention days for dump files [days], manually created dump files (a.k.a. fullysytem dumps and runtime dumps) that are    ")
     print("         older than this number of days are removed, default: -1 (not used)                                                        ")
+    print("         ----  HDBCONS FILES ----                                                                                                  ")
+    print(" -hr     retention days for lines in the hdbcons trace file [days], unfortunately there is no file rotation for *.hdbcons.trc files")
+    print("         (see SAP Note 3051846), therefore -hr can be used to define retention days for lines in these files. WARNING: this might  ")
+    print("         temporarily require up to twice the file's memory usage! If the file is larger than 10 GB hanacleaner will print a warning")
+    print("         and then ignore that file.          default: -1 (not used)                                                                ")
     print("         ----  ANY FILES  ----                                                                                                     ")
     print(" -gr     retention days for any general file [days], files in the directory specified with -gd and with the file names including   ")
     print("         the word specified with -gw are only saved for this number of days, default: -1 (not used)                                ")
@@ -129,7 +139,7 @@ def printHelp():
     print("         columns with compression type 'DEFAULT' (i.e. no additional compression algorithm in main)                                ")
     print(" -cr     max allowed rows, if a column has more rows --> compress if -cs&-cd, default: -1 (not used) e.g. 10000000                 ")
     print(" -cs     max allowed size [MB], if a column is larger --> compress if -cr&-cd, default: -1 (not used) e.g. 500                     ")
-    print(" -cd     min allowed distinct count [%], if a column has less distinct quota --> compress if -cr&-cs, default -1 (not used) e.g. 5 ") 
+    print(" -cd     min allowed distinct count [%], if a column has less distinct quota --> compress if -cr&-cs, default -1 (not used) e.g. 1 ") 
     print("         3. Both following two flags, -cu and -cq, must be > 0 to control the force compression optimization on tables whose UDIV  ")
     print("         quota is too large, i.e. #UDIVs/(#raw main + #raw delta)                                                                  ")
     print(" -cq     max allowed UDIV quota [%], if the table has larger UDIV quota --> compress if -cu, default: -1 (not used) e.g. 150       ")
@@ -524,7 +534,7 @@ def get_all_databases(execute_sql, hdbsql_string, dbuserkey, local_host, out_sql
     return all_databases
 
 def checkIfAcceptedFlag(word):
-    if not word in ["-h", "--help", "-d", "--disclaimer", "-ff", "-be", "-bd", "-bb", "-bo", "-br", "-bn", "-tc", "-te", "-tcb", "-tbd", "-tmo", "-tf", "-to", "-td", "-dr", "-gr", "-gd", "-gw", "-gm", "-zb", "-zp", "-zl", "-zo", "-zk", "-ar", "-kr", "-ao", "-ad", "-om", "-oo", "-lr", "-eh", "-eu", "-ur", "-pe", "-fl", "-fo", "-rc", "-ro", "-cc", "-ce", "-cr", "-cs", "-cd", "-cq", "-cu", "-cb", "-cp", "-cm", "-co", "-vs", "-vm", "-vt", "-vn", "-vtt", "-vto", "-vr", "-vnr", "-dsr", "-vl", "-ir", "-es", "-os", "-op", "-of", "-or", "-oc", "-oi", "-fs", "-if", "-df", "-hci", "-so", "-ssl", "-vlh", "-k", "-dbs", "-en", "-et", "-ena", "-enc", "-ens", "-enm"]:
+    if not word in ["-h", "--help", "-d", "--disclaimer", "-ff", "-be", "-bd", "-bb", "-bo", "-br", "-bn", "-tc", "-te", "-tcb", "-tbd", "-tmo", "-tf", "-ti", "-to", "-td", "-dr", "-hr", "-gr", "-gd", "-gw", "-gm", "-zb", "-zp", "-zl", "-zo", "-zk", "-ar", "-kr", "-ao", "-ad", "-om", "-oo", "-lr", "-eh", "-eu", "-ur", "-pe", "-fl", "-fo", "-rc", "-ro", "-cc", "-ce", "-cr", "-cs", "-cd", "-cq", "-cu", "-cb", "-cp", "-cm", "-co", "-vs", "-vm", "-vt", "-vn", "-vtt", "-vto", "-vr", "-vnr", "-dsr", "-vl", "-ir", "-es", "-os", "-op", "-of", "-or", "-oc", "-oi", "-fs", "-if", "-df", "-hci", "-so", "-ssl", "-vlh", "-k", "-dbs", "-en", "-et", "-ena", "-enc", "-ens", "-enm"]:
         print("INPUT ERROR: ", word, " is not one of the accepted input flags. Please see --help for more information.")
         os._exit(1)
 
@@ -663,7 +673,7 @@ def clear_traces(trace_list, oldestRetainedTraceContentDate, backupTraceContent,
     errorlog += "If there is another error (i.e. not insufficient privilege) then please try to execute \n"+sql+"\nin e.g. the SQL editor in SAP HANA Studio. If you get the same error then this has nothing to do with hanacleaner"
     try_execute_sql(sql, errorlog, sqlman, logman)    
      
-def clean_trace_files(retainedTraceContentDays, retainedExpensiveTraceContentDays, backupTraceContent, backupTraceDirectory, timeOutForMove, retainedTraceFilesDays, outputTraces, outputRemovedTraces, SID, DATABASE, local_dbinstance, hosts, sqlman, logman):
+def clean_trace_files(retainedTraceContentDays, retainedExpensiveTraceContentDays, backupTraceContent, backupTraceDirectory, timeOutForMove, retainedTraceFilesDays, ignoreTraceFiles, outputTraces, outputRemovedTraces, SID, DATABASE, local_dbinstance, hosts, sqlman, logman):
     nbrTracesBefore = int(run_command(sqlman.hdbsql_jAQaxU + " \"SELECT COUNT(*) FROM sys.m_tracefiles\"").strip(' '))
     if nbrTracesBefore == 0:
         return 0  
@@ -722,8 +732,11 @@ def clean_trace_files(retainedTraceContentDays, retainedExpensiveTraceContentDay
         sql = "select FILE_NAME from sys.m_tracefiles where file_size != '-1' and file_mtime < '"+oldestRetainedTraceFilesDate.strftime('%Y-%m-%d')+" "+datetime.now().strftime("%H:%M:%S")+"'"  # file_size = -1 --> folder, cannot be removed
         filesToBeRemoved = run_command(sqlman.hdbsql_jAQaxU + " \"" + sql + "\"").splitlines(1)
         filesToBeRemoved = [file.strip('\n').strip(' ') for file in filesToBeRemoved if file != '\n'] 
-        # Ignore files with names that breaks the ALTER command, or kill.sap according to SAP Note 2349144, and backup.log and backint.log since they are taken care of by -zb, see SAP Note 2431472 about hdbdaemon, we do not want to delete any .sem or .status file, and we do not want to delete any links, e.g. .sap<SID>_HDB<inst>, and we dont want to delete the log for the webdispatcher, and we are not allowed to delete Lodal Secure Store files
-        filesToBeRemoved = [file for file in filesToBeRemoved if not (" " in file or "," in file or "'" in file or "kill.sap" in file or "backup.log" in file or "backint.log" in file or "hdbdaemon.status" in file or "sapstart.sem" in file or "sapstart.log" in file or ".sap"+SID+"_HDB"+local_dbinstance in file or "http_fe.log" in file or "lss/" in file)]
+        # Ignore files with names that breaks the ALTER command, or kill.sap according to SAP Note 2349144, and backup.log and backint.log since they are taken care of by -zb, see SAP Note 2431472 about hdbdaemon, 
+        # we do not want to delete any .sem or .status file, and we do not want to delete any links, e.g. .sap<SID>_HDB<inst>, and we dont want to delete the log for the webdispatcher, and we are not allowed to delete Local Secure Store files, or SUSEs Python Hook
+        ignoreList = [" ", ",", "'", "kill.sap", "backup.log", "backint.log", "hdbdaemon.status", "sapstart.sem", "sapstart.log", ".sap"+SID+"_HDB"+local_dbinstance, "http_fe.log", "lss/", "nameserver_suschksrv.trc"]
+        filesToBeRemoved = [file for file in filesToBeRemoved if not any(x in file for x in ignoreList)]
+        filesToBeRemoved = [file for file in filesToBeRemoved if not any(fnmatch.fnmatch(file, x) for x in ignoreTraceFiles)]
         # Make sure we only delete files with known extensions (we dont delete .sem or .status files). Added two files without extensions that we want to delete. To delete files like dev_icm_sec one have to run HANACleaner as dev_icm_sec from SYSTEMDB, otherwise they are not in m_tracefiles
         filesToBeRemoved = [file for file in filesToBeRemoved if any(x in file for x in [".trc", ".log", ".stat", ".py", ".tpt", ".gz", ".zip", ".old", ".xml", ".txt", ".docs", ".cfg", ".dmp", ".cockpit", ".xs", "dev_icm_sec", "wdisp_icm_log"])] 
         if filesToBeRemoved:  # otherwise no file to remove
@@ -761,7 +774,72 @@ def clean_dumps(retainedDumpDays, local_dbinstance, sqlman, logman):
     nbrDumpsAfter = int(run_command("ls "+path+"fullsysteminfodump* | wc -l").strip(' ')) 
     return nbrDumpsBefore - nbrDumpsAfter
            
+def clean_hdbcons(retainedHDBCONSDays, local_dbinstance, DATABASE, sqlman, logman):
+    path = (cdalias('cdtrace', local_dbinstance)).replace("\n","").replace("'", "") #RHEL put in line endings and strange '
+    if ' ' in path:
+        print("ERROR: The path should not contain a empty space! path = \n", path)
+        os._exit(1)
+    if not DATABASE:
+        log("INPUT ERROR: If -hr is used, either DATABASE must be specified in the key (see the manual of hdbuserstore), or -dbs must be specifed.", logman)
+        log("NOTE: -hr is not supported for none MDC systems", logman, True)
+        os._exit(1)
+    if not DATABASE == 'SYSTEMDB':
+        path += '/DB_'+DATABASE
+    hdbconsfiles = run_command("ls "+path+"/*hdbcons.trc").splitlines(1)
+    oldestDayForKeepingLine = str(datetime.now() + timedelta(days = -int(retainedHDBCONSDays))).split(' ')[0].replace('-', '')
+    nRowsCleaned = 0
+    for hdbconsfile in hdbconsfiles:   # from Pike's rules, there is no reason to read in chunks of the file: http://users.ece.utexas.edu/~adnan/pike.html
+        hdbconsfile = hdbconsfile.replace("\n", "")
+        if os.path.getsize(hdbconsfile)/1000000000.0 > 10.0:
+            print("WARNING, this hdbcons.trc file "+hdbconsfile+" is larger than 10 GB, it will not be processed.")
+        else:
+            nbrRowsBefore = file_len(hdbconsfile)
+            with open(hdbconsfile, 'r') as fin:
+                tempfile = hdbconsfile.replace('.trc','.trc.tmp')
+                with open(tempfile, 'w') as fout:
+                    title_row_done = False
+                    found_date = False
+                    for line in fin:
+                        if found_date or not title_row_done:
+                            fout.write(line)
+                            title_row_done = True
+                        else:
+                            dates = dates_from_hdbcons_line(line)
+                            if dates:
+                                max_date = max([int(date.replace('-', '')) for date in dates])
+                                if max_date >= int(oldestDayForKeepingLine):
+                                    fout.write(line)
+                                    found_date = True
+            os.remove(hdbconsfile)
+            os.rename(tempfile, hdbconsfile)
+            nbrRowsAfter = file_len(hdbconsfile)
+            nRowsCleaned += nbrRowsBefore - nbrRowsAfter
+    return nRowsCleaned
 
+def dates_from_hdbcons_line(line):
+    dates = []
+    words = re.split(" +|\t", line)
+    for word in words:
+        if is_date(word):
+            dates.append(word)
+    return dates
+
+def is_date(str):
+    ss = str.split('-')
+    if len(ss) == 3:
+        ss1 = ss[0]
+        ss2 = ss[1].rstrip('0')
+        ss3 = ss[2].rstrip('0')
+        if is_integer(ss1) and is_integer(ss2) and is_integer(ss3):
+            return 1000 < int(ss1) < 3000 and 1 <= int(ss2) <= 12 and 1 <= int(ss3) <= 31
+    return False
+
+def file_len(filename):
+    with open(filename) as f:
+        for i, _ in enumerate(f):
+            pass
+    return i + 1
+    
 def output_removed_trace_files(before, after, logman):
     beforeLines = before.splitlines(1)
     afterLines = after.splitlines(1) 
@@ -1352,7 +1430,9 @@ def main():
     retainedTraceContentDays = "-1"
     retainedExpensiveTraceContentDays = "-1"
     retainedTraceFilesDays = "-1"
+    ignoreTraceFiles = [""]
     retainedDumpDays = "-1"
+    retainedHDBCONSDays = "-1"
     retainedAnyFileDays = "-1"
     anyFilePaths = [""]
     anyFileWords = [""]
@@ -1457,9 +1537,11 @@ def main():
                     backupTraceDirectory              = getParameterFromFile(firstWord, '-tbd', flagValue, flag_file, flag_log, backupTraceDirectory)
                     timeOutForMove                    = getParameterFromFile(firstWord, '-tmo', flagValue, flag_file, flag_log, timeOutForMove)
                     retainedTraceFilesDays            = getParameterFromFile(firstWord, '-tf', flagValue, flag_file, flag_log, retainedTraceFilesDays)
+                    ignoreTraceFiles                  = getParameterListFromFile(firstWord, '-ti', flagValue, flag_file, flag_log, ignoreTraceFiles)
                     outputTraces                      = getParameterFromFile(firstWord, '-to', flagValue, flag_file, flag_log, outputTraces)
                     outputRemovedTraces               = getParameterFromFile(firstWord, '-td', flagValue, flag_file, flag_log, outputRemovedTraces)
                     retainedDumpDays                  = getParameterFromFile(firstWord, '-dr', flagValue, flag_file, flag_log, retainedDumpDays)
+                    retainedHDBCONSDays               = getParameterFromFile(firstWord, '-hr', flagValue, flag_file, flag_log, retainedHDBCONSDays)
                     retainedAnyFileDays               = getParameterFromFile(firstWord, '-gr', flagValue, flag_file, flag_log, retainedAnyFileDays)
                     anyFilePaths                      = getParameterListFromFile(firstWord, '-gd', flagValue, flag_file, flag_log, anyFilePaths)
                     anyFilePaths                      = [p.replace('%SID', SID) for p in anyFilePaths]
@@ -1546,9 +1628,11 @@ def main():
     backupTraceDirectory              = getParameterFromCommandLine(sys.argv, '-tbd', flag_log, backupTraceDirectory)
     timeOutForMove                    = getParameterFromCommandLine(sys.argv, '-tmo', flag_log, timeOutForMove)
     retainedTraceFilesDays            = getParameterFromCommandLine(sys.argv, '-tf', flag_log, retainedTraceFilesDays)
+    ignoreTraceFiles                  = getParameterListFromCommandLine(sys.argv, '-ti', flag_log, ignoreTraceFiles)
     outputTraces                      = getParameterFromCommandLine(sys.argv, '-to', flag_log, outputTraces)
     outputRemovedTraces               = getParameterFromCommandLine(sys.argv, '-td', flag_log, outputRemovedTraces)
     retainedDumpDays                  = getParameterFromCommandLine(sys.argv, '-dr', flag_log, retainedDumpDays)
+    retainedHDBCONSDays               = getParameterFromCommandLine(sys.argv, '-hr', flag_log, retainedHDBCONSDays)
     retainedAnyFileDays               = getParameterFromCommandLine(sys.argv, '-gr', flag_log, retainedAnyFileDays)
     anyFilePaths                      = getParameterListFromCommandLine(sys.argv, '-gd', flag_log, anyFilePaths)
     anyFilePaths                      = [p.replace('%SID', SID) for p in anyFilePaths]
@@ -1756,9 +1840,15 @@ def main():
         if retainedTraceContentDays == "-1" and retainedExpensiveTraceContentDays == "-1" and retainedTraceFilesDays == "-1":
             log("INPUT ERROR: -td is true allthough -tc, -te and -tf are all -1. This makes no sense. Please see --help for more information.", logman, True)
             os._exit(1)
+    ### ignoreTraceFiles, -ti
+    # nothing to check
     ### retainedDumpDays, -dr
     if not is_integer(retainedDumpDays):
         log("INPUT ERROR: -dr must be an integer. Please see --help for more information.", logman, True)
+        os._exit(1)
+    ### retainedHDBCONSDays, -hr
+    if not is_integer(retainedHDBCONSDays):
+        log("INPUT ERROR: -hr must be an integer. Please see --help for more information.", logman, True)
         os._exit(1)
     ### retainedAnyFileDays, -gr
     if not is_integer(retainedAnyFileDays):
@@ -2071,7 +2161,7 @@ def main():
                 else:
                     log("    (Cleaning of the backup catalog was not done since -be and -bd were both negative (or not specified))", logman)
                 if retainedTraceContentDays != "-1" or retainedExpensiveTraceContentDays != "-1" or retainedTraceFilesDays != "-1":
-                    nCleaned = clean_trace_files(retainedTraceContentDays, retainedExpensiveTraceContentDays, backupTraceContent, backupTraceDirectory, timeOutForMove, retainedTraceFilesDays, outputTraces, outputRemovedTraces, SID, DATABASE, local_dbinstance, hosts(sqlman), sqlman, logman)
+                    nCleaned = clean_trace_files(retainedTraceContentDays, retainedExpensiveTraceContentDays, backupTraceContent, backupTraceDirectory, timeOutForMove, retainedTraceFilesDays, ignoreTraceFiles, outputTraces, outputRemovedTraces, SID, DATABASE, local_dbinstance, hosts(sqlman), sqlman, logman)
                     logmessage = str(nCleaned)+" trace files were removed (-tc and -tf)"
                     log(logmessage, logman)
                     emailmessage += logmessage+"\n"
@@ -2084,6 +2174,13 @@ def main():
                     emailmessage += logmessage+"\n"
                 else:
                     log("    (Cleaning dumps was not done since -dr was -1 (or not specified))", logman)
+                if retainedHDBCONSDays != "-1":
+                    nRowsCleaned = clean_hdbcons(retainedHDBCONSDays, local_dbinstance, DATABASE, sqlman, logman)
+                    logmessage = "In total "+str(nRowsCleaned)+" rows where cleaned from hdbcons.trc files (-hr)"
+                    log(logmessage, logman)
+                    emailmessage += logmessage+"\n"
+                else:
+                    log("    (Cleaning hdbcons was not done since -hr was -1 (or not specified))", logman)
                 if retainedAnyFileDays != "-1":
                     nCleaned = clean_anyfile(retainedAnyFileDays, anyFilePaths, anyFileWords, anyFileMaxDepth, sqlman, logman)
                     logmessage = str(nCleaned)+" general files were removed (-gr)"
