@@ -958,14 +958,16 @@ def clean_alerts(minRetainedAlertDays, outputAlerts, outputDeletedAlerts, sqlman
     return nbrAlertsBefore - nbrAlertsAfter
     
 def clean_ini(minRetainedIniDays, version, revision, mrevision, sqlman, logman):
-    if version < 2 or revision < 30:
-        log("\nERROR: the -ir flag is only supported starting with SAP HANA 2.0 SPS03. You run on SAP HANA "+str(version)+" revision "+str(revision)+" maintenance revision "+str(mrevision), logman, True)
-        os._exit(1)
-    if version > 4:
-        log("\nERROR: the -ir flag is not supported any more with SAP HANA 2.0 SPS05. You run on SAP HANA "+str(version)+" revision "+str(revision)+" maintenance revision "+str(mrevision), logman, True)
+    if revision < 30:
+        log("\nWARNING: the -ir flag is only supported starting with SAP HANA 2.0 SPS03. You run on SAP HANA "+str(version)+" revision "+str(revision)+" maintenance revision "+str(mrevision), logman, True)
+        #os._exit(1)
+        return 0
+    if revision > 49:
+        log("\nWARNING: the -ir flag is not supported any more with SAP HANA 2.0 SPS05. You run on SAP HANA "+str(version)+" revision "+str(revision)+" maintenance revision "+str(mrevision), logman, True)
         # compare https://help.sap.com/viewer/4fe29514fd584807ac9f2a04f6754767/2.0.05/en-US/fb097f2620c645d18064ce6b93c24a1e.html
         # with https://help.sap.com/viewer/4fe29514fd584807ac9f2a04f6754767/2.0.04/en-US/fb097f2620c645d18064ce6b93c24a1e.html 
-        os._exit(1)
+        #os._exit(1)
+        return 0
     try:
         nbrIniHistBefore = int(run_command(sqlman.hdbsql_jAQaxU + " \"SELECT COUNT(*) FROM SYS.M_INIFILE_CONTENT_HISTORY\"").strip(' '))
     except: 
