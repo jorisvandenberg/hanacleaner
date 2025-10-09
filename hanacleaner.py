@@ -119,8 +119,9 @@ def printHelp():
     print("         days are removed, default: -1 (not used)            (requires SELECT and DELETE on the _SYS_STATISTICS schema)            ")
     print("         ----  DATA VOLUMES FRAGMENTATION  ----                                                                                    ")
     print(" -fl     fragmentation limit [%], maximum fragmentation of data volume files, of any service, before defragmentation of that       ")
-    print("         service is started: ALTER SYSTEM RECLAIM DATAVOLUME '<host>:<port>' 120 DEFRAGMENT,        default: -1 (not used)         ")
+    print("         service is started: ALTER SYSTEM RECLAIM DATAVOLUME '<host>:<port>' < -fd > DEFRAGMENT,     deault: -1 (not used)         ")
     print("         Note: If you use System Replication see Q19 in SAP Note 1999880.                                                          ")
+    print(" -fd     defragment execution [%], the defragment execution percentage (see SQL above), default: 120                               ")
     print(" -fo     output fragmentation [true/false], displays data volume statistics before and after defragmentation, default: false       ")
     print("         ---- LOB REORG (only COLUMN store tables) ----                                                                            ")
     print(" -lobf   max allowed fragmentation for an LOB [%], an LOB column with higher percentage of fragmentation, i.e. (physical size -    ")
@@ -589,7 +590,7 @@ def get_all_databases(execute_sql, hdbsql_string, dbuserkey, local_host, out_sql
     return all_databases
 
 def checkIfAcceptedFlag(word):
-    if not word in ["-h", "--help", "-d", "--disclaimer", "-ff", "-be", "-bd", "-bb", "-bo", "-br", "-bn", "-tc", "-tb", "-te", "-tcb", "-tbd", "-tmo", "-tf", "-ti", "-to", "-td", "-dr", "-hr", "-gr", "-gd", "-gw", "-gm", "-zb", "-zp", "-zl", "-zo", "-zk", "-ar", "-kr", "-ao", "-ad", "-om", "-oo", "-lr", "-eh", "-eu", "-ur", "-pe", "-fl", "-fo", "-lobf", "-lobp", "-lobs", "-lobn", "-lobw", "-lobl", "-rc", "-ro", "-cc", "-ce", "-cr", "-cs", "-cd", "-cq", "-cu", "-cb", "-cp", "-cm", "-co", "-vs", "-vm", "-vt", "-vn", "-vtt", "-vto", "-vr", "-vnr", "-dsr", "-vtr", "-vts", "-vta", "-vtp", "-ipt", "-ips", "-ipn", "-vl", "-ir", "-es", "-os", "-op", "-of", "-or", "-oc", "-oi", "-hc", "-fs", "-if", "-df", "-hci", "-so", "-ssl", "-vlh", "-k", "-dbs", "-en", "-et", "-ena", "-enc", "-ens", "-enm"]:
+    if not word in ["-h", "--help", "-d", "--disclaimer", "-ff", "-be", "-bd", "-bb", "-bo", "-br", "-bn", "-tc", "-tb", "-te", "-tcb", "-tbd", "-tmo", "-tf", "-ti", "-to", "-td", "-dr", "-hr", "-gr", "-gd", "-gw", "-gm", "-zb", "-zp", "-zl", "-zo", "-zk", "-ar", "-kr", "-ao", "-ad", "-om", "-oo", "-lr", "-eh", "-eu", "-ur", "-pe", "-fl", "-fd", "-fo", "-lobf", "-lobp", "-lobs", "-lobn", "-lobw", "-lobl", "-rc", "-ro", "-cc", "-ce", "-cr", "-cs", "-cd", "-cq", "-cu", "-cb", "-cp", "-cm", "-co", "-vs", "-vm", "-vt", "-vn", "-vtt", "-vto", "-vr", "-vnr", "-dsr", "-vtr", "-vts", "-vta", "-vtp", "-ipt", "-ips", "-ipn", "-vl", "-ir", "-es", "-os", "-op", "-of", "-or", "-oc", "-oi", "-hc", "-fs", "-if", "-df", "-hci", "-so", "-ssl", "-vlh", "-k", "-dbs", "-en", "-et", "-ena", "-enc", "-ens", "-enm"]:
         print("INPUT ERROR: ", word, " is not one of the accepted input flags. Please see --help for more information.")
         os._exit(1)
 
@@ -1164,7 +1165,7 @@ def clean_pending_emails(pendingEmailsDays, sqlman, logman):
     return nbrEmailsBefore - nbrEmailsAfter    
           
 
-def defragment(fragmentationLimit, outputFragmentation, sqlman, logman):
+def defragment(fragmentationLimit, fragmentationDefrag, outputFragmentation, sqlman, logman):
     fragPerPortBefore = run_command(sqlman.hdbsql_jAaxU + " \"SELECT HOST, PORT, USED_SIZE, TOTAL_SIZE from SYS.M_VOLUME_FILES WHERE FILE_TYPE = 'DATA'\" ").splitlines(1)
     fragPerPortBefore = [port.strip('\n').strip('|').split('|') for port in fragPerPortBefore]    
     fragPerPortBefore = [[elem.strip(' ') for elem in port] for port in fragPerPortBefore]    
@@ -1177,7 +1178,7 @@ def defragment(fragmentationLimit, outputFragmentation, sqlman, logman):
         log("\n", logman)
     for port in fragPerPortBefore:
         if port[4] > fragmentationLimit:
-            sql = "ALTER SYSTEM RECLAIM DATAVOLUME '"+port[0]+":"+port[1]+"' 120 DEFRAGMENT"
+            sql = "ALTER SYSTEM RECLAIM DATAVOLUME '"+port[0]+":"+port[1]+"' "+fragmentationDefrag+" DEFRAGMENT"
             errorlog = "\nERROR: The user represented by the key "+sqlman.key+" could not defragment the data volumes. \nOne possible reason for this is insufficient privilege, \ne.g. lack of the privilege RESOURCE ADMIN.\n"
             errorlog += "If there is another error (i.e. not insufficient privilege) then please try to execute \n"+sql+"\nin e.g. the SQL editor in SAP HANA Studio. If you get the same error then this has nothing to do with hanacleaner"
             errorlog += "Note: If you use System Replication see Q19 in SAP Note 1999880"
@@ -1629,6 +1630,7 @@ def main():
     retainedAuditLogDays = "-1"
     pendingEmailsDays = "-1"
     fragmentationLimit = "-1" # percent
+    fragmentationDefrag = "120" # percent
     outputFragmentation = "false"
     lobFragMax = "-1"   # M0372
     lobFragPacked = "false"
@@ -1759,6 +1761,7 @@ def main():
                     retainedAuditLogDays              = getParameterFromFile(firstWord, '-ur', flagValue, flag_file, flag_log, retainedAuditLogDays)
                     pendingEmailsDays                 = getParameterFromFile(firstWord, '-pe', flagValue, flag_file, flag_log, pendingEmailsDays)
                     fragmentationLimit                = getParameterFromFile(firstWord, '-fl', flagValue, flag_file, flag_log, fragmentationLimit)
+                    fragmentationDefrag               = getParameterFromFile(firstWord, '-fd', flagValue, flag_file, flag_log, fragmentationDefrag)
                     outputFragmentation               = getParameterFromFile(firstWord, '-fo', flagValue, flag_file, flag_log, outputFragmentation)
                     lobFragMax                        = getParameterFromFile(firstWord, '-lobf', flagValue, flag_file, flag_log, lobFragMax)
                     lobFragPacked                     = getParameterFromFile(firstWord, '-lobp', flagValue, flag_file, flag_log, lobFragPacked)
@@ -1865,6 +1868,7 @@ def main():
     retainedAuditLogDays              = getParameterFromCommandLine(sys.argv, '-ur', flag_log, retainedAuditLogDays)
     pendingEmailsDays                 = getParameterFromCommandLine(sys.argv, '-pe', flag_log, pendingEmailsDays)
     fragmentationLimit                = getParameterFromCommandLine(sys.argv, '-fl', flag_log, fragmentationLimit)
+    fragmentationDefrag               = getParameterFromCommandLine(sys.argv, '-fd', flag_log, fragmentationDefrag)
     outputFragmentation               = getParameterFromCommandLine(sys.argv, '-fo', flag_log, outputFragmentation)
     lobFragMax                        = getParameterFromCommandLine(sys.argv, '-lobf', flag_log, lobFragMax)
     lobFragPacked                     = getParameterFromCommandLine(sys.argv, '-lobp', flag_log, lobFragPacked)
@@ -2182,6 +2186,10 @@ def main():
         log("INPUT ERROR: -fl must be an integer. Please see --help for more information.", logman, True)
         os._exit(1)
     fragmentationLimit = int(fragmentationLimit)
+    ### fragmentationDefrag, -fd
+    if not is_integer(fragmentationDefrag):
+        log("INPUT ERROR: -fd must be an integer. Please see --help for more information.", logman, True)
+        os._exit(1)
     ### outputFragmentation, -fo
     outputFragmentation = checkAndConvertBooleanFlag(outputFragmentation, "-fo", logman)
     ### lobFragMax, -lobf
@@ -2526,7 +2534,7 @@ def main():
                     else:
                         log("    (Cleaning of pending emails was not done since -pe was -1 (or not specified))", logman)  
                     if fragmentationLimit >= 0:
-                        defragmentedPerPort = defragment(fragmentationLimit, outputFragmentation, sqlman, logman)
+                        defragmentedPerPort = defragment(fragmentationLimit, fragmentationDefrag, outputFragmentation, sqlman, logman)
                         if defragmentedPerPort:
                             for port in defragmentedPerPort:
                                 if port[2] > 0:
